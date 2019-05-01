@@ -11,7 +11,7 @@ import tau.WalkEvent.{PostVisitDirectory, PreVisitDirectory, VisitFile, VisitFil
 import scala.concurrent.{Future, Promise}
 import scala.util.{Failure, Success}
 
-object LocalFile {
+object LocalFiles {
   import scala.concurrent.ExecutionContext.Implicits.global
 
   def walkFileTree[S](path: Path, state: S)(fn: PartialFunction[(S, WalkEvent), VisitResult[S]]): Future[S] = {
@@ -47,7 +47,7 @@ object LocalFile {
       })
 
       currentState
-    }(BlockingIO.singleThreadExecutionContext)
+    }(BlockingIO.blockingExecutionContext)
   }
 
   def readFileContents(path: Path): Future[String] = {

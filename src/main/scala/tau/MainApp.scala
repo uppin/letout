@@ -12,8 +12,12 @@ object MainApp extends App {
 
   val workspaces = new TauWorkspaces()
 
-  workspaces.createAWorkspace("/Users/mantas/Uppin")
-
-  executor.shutdown()
-  BlockingIO.shutdown()
+  try workspaces.createAWorkspace("/Users/mantas/Uppin")
+  catch {
+    case e: Throwable => e.printStackTrace(System.err)
+  }
+  finally {
+    executor.shutdown()
+    BlockingIO.shutdown()
+  }
 }
