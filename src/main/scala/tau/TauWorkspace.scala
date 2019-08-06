@@ -2,34 +2,33 @@ package tau
 
 import java.nio.file._
 
-import io.circe.{Decoder, Json, JsonObject}
+import io.circe.JsonObject
 import io.circe.generic.auto._
-import io.circe.yaml.parser
+import monix.execution.Scheduler
+import monix.reactive.Consumer
 import tau.WalkEvent.{PreVisitDirectory, VisitFile}
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.util.{Failure, Success, Try}
 
-class TauWorkspace(path: String, projects: Seq[Project])(implicit executionContext: ExecutionContext) {
-
-  def build: Future[Unit] = {
-    ???
-  }
+trait TauWorkspace {
+  def build: Future[Unit]
 }
 
-class TauWorkspaces(implicit executionContext: ExecutionContext) {
+class TauWorkspaces(
+    targetScheduler: TargetScheduler,
+    targetBuilder: TargetBuilder)(implicit executionContext: ExecutionContext) {
 
   def createAWorkspace(path: String): TauWorkspace =
     Await.result(createAWorkspaceAsync(path), Duration.Inf)
 
-  private def createAWorkspaceAsync(path: String) = {
+  private def createAWorkspaceAsync(path: String): Future[TauWorkspace] = {
     for {
       projectFiles <- findProjectFiles(path)
       projects = projectFiles.map(projectFile => new TauProject(projectFile))
       targets <- Future.sequence(projects.map(_.targets))
-      _ = println(s"Targets loaded: ${targets.flatten.size}")
-    } yield new TauWorkspace(path, projects)
+      _ = println(s"${targets.flatten.size} targets loaded in ${projects.size} projects")
+    } yield new IntTauWorkspace(path, projects)
   }
 
   private def findProjectFiles(path: String): Future[Seq[Path]] =
@@ -39,9 +38,21 @@ class TauWorkspaces(implicit executionContext: ExecutionContext) {
           VisitResult.Continue(state += path)
       }
     } yield paths.result()
+
+  private class IntTauWorkspace(path: String, projects: Seq[Project])(implicit executionContext: ExecutionContext) extends TauWorkspace {
+
+    implicit val scheduler = Scheduler(executionContext)
+
+    def build: Future[Unit] = {
+      val targetQueue = targetScheduler.processBuildsInOrder(projects)
+
+      targetQueue.consumeWith(Consumer.foreach(target => println("== BUILD", target.coord))).runAsync
+    }
+  }
 }
 
 trait Project {
+  def projectDescriptor: Future[TauProjectDescriptor]
   def targets: Future[Seq[Target]]
 }
 
@@ -49,12 +60,10 @@ class TauProject(path: Path)(implicit executionContext: ExecutionContext) extend
 
   private val directory = path.getParent
 
-  private lazy val projectDescriptor: Future[TauProjectDescriptor] =
+  lazy val projectDescriptor: Future[TauProjectDescriptor] =
     for {
-      content <- LocalFiles.readFileContents(path)
-      _ = println()
-      descriptor <- Future.fromTry(Yaml.parse[TauProjectDescriptor](content))
-    } yield descriptor
+      descriptor <- Yaml.parseFileContents[TauProjectCodecDescriptor](path)
+    } yield descriptor.toDescriptor(path)
 
   override def targets: Future[Seq[Target]] =
     for {
@@ -78,6 +87,7 @@ class TauProject(path: Path)(implicit executionContext: ExecutionContext) extend
 
 trait Target {
   def associatedPath: Option[Path]
+  def deps: Set[TargetDependencyReference]
 }
 
 case class TauTarget(
@@ -86,21 +96,41 @@ case class TauTarget(
 ) extends Target {
 
   def associatedPath: Option[Path] = Some(path)
+
+  override def deps: Set[TargetDependencyReference] = (descriptor.deps.getOrElse(Nil).map(TargetDependencyReference(_, DependencyScope.Compile)) ++
+    descriptor.runtimeDeps.getOrElse(Nil).map(TargetDependencyReference(_, DependencyScope.Runtime))).toSet
 }
+
+case class TargetCoord(path: String, name: String)
 
 object TauTargetsFile {
 
   def read(path: Path)(implicit executionContext: ExecutionContext): Future[Seq[TauTarget]] =
     for {
-      targetsSource <- LocalFiles.readFileContents(path)
-      targetDescriptors <- Future.fromTry(Yaml.parse[Seq[TauTargetDescriptor]](targetsSource))
+      targetDescriptors <- Yaml.parseFileContents[Seq[TauTargetDescriptor]](path)
     } yield targetDescriptors.map(desc => TauTarget(path, desc))
 }
 
 case class TauProjectDescriptor(
+    path: Path,
     sourceRoots: Seq[String],
-    coords: Map[String, String]
+    mounts: Map[String, String],
+    bookmarks: Map[String, String]
 )
+
+case class TauProjectCodecDescriptor(
+    sourceRoots: Option[Seq[String]],
+    mounts: Option[Map[String, String]],
+    bookmarks: Option[Map[String, String]]
+) {
+  def toDescriptor(path: Path) =
+    TauProjectDescriptor(
+      path = path,
+      sourceRoots = sourceRoots.getOrElse(Nil),
+      mounts = mounts.getOrElse(Map.empty),
+      bookmarks = bookmarks.getOrElse(Map.empty)
+    )
+}
 
 case class TauTargetDescriptor(
     name: String,
@@ -111,19 +141,24 @@ case class TauTargetDescriptor(
     runtimeDeps: Option[Seq[String]]
 )
 
-object Yaml {
+case class TargetDependencyReference(
+    reference: DependencyReference,
+    scope: DependencyScope
+)
 
-  def parse[R](content: String)(implicit decoder: Decoder[R]): Try[R] = {
-    parser.parse(content) match {
-      case Right(json) => read[R](json)
-      case Left(error) => Failure(error)
-    }
-  }
+case class TargetDependency(
+    reference: Dependency,
+    scope: DependencyScope
+)
 
-  private def read[R](json: Json)(implicit decoder: Decoder[R]): Try[R] = {
-    json.as[R] match {
-      case Right(value) => Success(value)
-      case Left(error) => Failure(error)
-    }
-  }
+object TargetDependencyReference {
+  def apply(dependencyRef: String, scope: DependencyScope): TargetDependencyReference =
+    TargetDependencyReference(DependencyReference.parse(dependencyRef), scope)
+}
+
+sealed trait DependencyScope
+
+object DependencyScope {
+  case object Compile extends DependencyScope
+  case object Runtime extends DependencyScope
 }

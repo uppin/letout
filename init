@@ -6,10 +6,14 @@ import subprocess
 import sys
 import inspect
 import glob
+import argparse
+import time
+from ng import NailgunConnection, NailgunException
 
 currentDir = os.path.dirname(inspect.getfile(inspect.currentframe()))
 tauDir = os.path.join(os.getcwd(), '.tau')
 coursier = os.path.join(tauDir, 'coursier')
+nailgun_dep = 'com.facebook:nailgun-server:1.0.0'
 
 def setup_dir():
   try:
@@ -28,29 +32,108 @@ def fetch_coursier():
 
   os.chmod(coursier, 0o744)
 
-def compile(bootClasspath, classpath):
-  print('Compiling the tool')
+def compile_sources(classpath, sources, output):
+  ensure_ng('scalac', boot_classpath_for(get_scala_deps()))
 
-  sources = glob.glob(os.path.join(currentDir, 'src/main/scala/**/*.scala'))
-  output = os.path.join(tauDir, 'tool.jar')
-
-  commandArgs = ['java', boot_classpath_for(bootClasspath), 'scala.tools.nsc.Main', '-d', output, '-cp', classpath] + sources
-
-  exit = subprocess.call(commandArgs)
+  exit = run_class_ng('scalac', 'scala.tools.nsc.Main', ['-d', output] + ['-cp', classpath] + sources)
 
   if exit == 0:
     print('Output to ' + output)
 
   return output
 
-def runClass(mainJar, bootClasspath, depsClasspath, className):
-  commandArgs = ['java', boot_classpath_for(bootClasspath), '-cp', depsClasspath + ':' + mainJar, className]
+def run_class(bootClasspath, classpath, className, args = []):
+  commandArgs = mk_java_command(bootClasspath, classpath, className, args)
 
   print(' '.join(commandArgs))
 
-  subprocess.call(commandArgs)
+  result = subprocess.call(commandArgs)
+
+  if result > 0:
+    raise ChildProcessError('Command exited with ' + str(result))
+
+def run_class_ng(name, className, args = []):
+  with get_nailgun_connection(name) as c:
+    exitCode = c.send_command(className, args)
+
+    if exitCode == 898:
+      raise Exception('No such command ' + className)
+
+def ensure_ng(name, bootClasspath, classpath = None):
+  conn = get_nailgun_connection(name)
+
+  if conn is not None:
+    return conn
+
+  domainSocket = get_domain_socket(name)
+
+  try:
+    os.unlink(domainSocket)
+  except OSError:
+    if os.path.exists(domainSocket):
+        raise
+
+  classpathArg = fetch_deps([nailgun_dep])
+
+  if classpath is not None:
+    classpathArg += ':' + classpath
+
+  commandArgs = mk_java_command(bootClasspath, classpathArg, 'com.facebook.nailgun.NGServer', [get_transport_address(name)])
+
+  p = subprocess.Popen(commandArgs,
+                       cwd=os.getcwd(),
+                       stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+
+  print('Process created:', p.pid)
+
+  conn = wait_for_connection(name, 1000)
+
+  print('Server started with name "' + name + '"')
+
+  return conn
+
+def get_transport_address(name):
+  return 'local:' + get_domain_socket(name)
+
+def get_domain_socket(name):
+  return tauDir + '/' + name
+
+def wait_for_connection(name, timeout, start_time = time.time()):
+  elapsed_time = time.time() - start_time
+
+  while elapsed_time < timeout:
+    conn = get_nailgun_connection(name)
+
+    if conn is not None:
+      return conn
+
+  raise TimeoutError('Timeout of ' + str(timeout) + ' occurred. Elapsed ' + str(elapsed_time))
+
+def get_nailgun_connection(name):
+  try:
+    return mk_nailgun_connection(name)
+  except NailgunException:
+    return None
+
+def mk_nailgun_connection(name):
+  return NailgunConnection(
+      get_transport_address(name),
+      cwd=os.getcwd()
+  )
+
+def mk_java_command(bootClasspath, classpath, className, args = []):
+  if classpath is None:
+    classpathArg = []
+  else:
+    classpathArg = ['-cp', classpath]
+
+  return list(filter(lambda arg: len(arg) > 0, ['java', boot_classpath_for(bootClasspath)] + classpathArg + [className] + args))
 
 def fetch_deps(coords):
+  if coords is None:
+    return None
+
   coordsArgs = flatten([[coord] for coord in coords])
 
   with subprocess.Popen([coursier, 'fetch'] + coordsArgs + ['--classpath'],
@@ -63,20 +146,72 @@ def fetch_deps(coords):
     return classpath
 
 def boot_classpath_for(classpath):
-  return '-Xbootclasspath/a:{0}'.format(classpath)
+  if classpath is not None:
+    return '-Xbootclasspath/a:{0}'.format(classpath)
+  else:
+    return ''
 
 def flatten(a):
     return [item for sublist in a for item in sublist]
 
-setup_dir()
+def init():
+    setup_dir()
 
-print('Fetching deps')
+    print('Fetching deps')
 
-compileDeps = fetch_deps(['io.circe:circe-yaml_2.12:0.9.0', 'io.circe:circe-generic_2.12:0.11.1'])
+    compileDeps = fetch_deps([
+      'io.circe:circe-yaml_2.12:0.9.0',
+      'io.circe:circe-generic_2.12:0.11.1',
+      'io.monix:monix_2.12:3.0.0-8084549',
+      nailgun_dep
+    ])
 
-output = compile(fetch_deps(['org.scala-lang:scala-compiler:2.12.8']), compileDeps)
+    print('Compiling the tool')
 
-bootClasspath = fetch_deps(['org.scala-lang:scala-library:2.12.8'])
+    sources = glob.glob(os.path.join(currentDir, 'src/main/scala/**/*.scala'))
+    output = os.path.join(tauDir, 'tool.jar')
 
-runClass(output, bootClasspath, compileDeps, 'tau.MainApp')
+    output = compile_sources(compileDeps, sources, output)
 
+    bootClasspath = fetch_deps(['org.scala-lang:scala-library:2.12.8'])
+
+    # ensure_ng('tool', bootClasspath, compileDeps + ':' + output)
+
+    run_class(bootClasspath, compileDeps + ':' + output, 'tau.MainApp')
+
+    print('Init done')
+
+def compile_command(args):
+    resolved_files = flatten([glob.glob(pattern, recursive=True) for pattern in args.files])
+    deps = args.deps
+    outputJar = args.jar[0]
+
+    print('Compiling', resolved_files, 'to', outputJar)
+
+    compile_sources(fetch_deps(args.deps), resolved_files, outputJar)
+
+def get_scala_deps():
+    return fetch_deps(['org.scala-lang:scala-compiler:2.12.8'])
+
+parser = argparse.ArgumentParser(description='Letout basic build.')
+
+compile_parsers = parser.add_subparsers(help='compile help')
+compile_parser = compile_parsers.add_parser('compile')
+
+compile_parser.set_defaults(func=compile_command)
+
+compile_parser.add_argument('jar', metavar='output-jar', type=str, nargs=1,
+                    help='Output JAR')
+
+compile_parser.add_argument('files', metavar='file-pattern', type=str, nargs='*',
+                    help='Files to get compiled')
+
+compile_parser.add_argument('--dep', dest='deps', action='store',
+                    help='Dependency to be used')
+
+args = parser.parse_args()
+
+if not vars(args):
+    init()
+else:
+    print(args.func(args))

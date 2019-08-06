@@ -2,22 +2,33 @@ package tau
 
 import java.util.concurrent.Executors
 
-import scala.concurrent.ExecutionContext
+import monix.execution.Scheduler
+
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
 
 object MainApp extends App {
 
   val executor = Executors.newFixedThreadPool(4)
 
-  implicit val ec = ExecutionContext.fromExecutorService(executor)
+  implicit val ec = Scheduler(executor)
 
-  val workspaces = new TauWorkspaces()
+  val targetScheduler = new TargetScheduler
+  val targetBuilder = new TargetBuilder
 
-  try workspaces.createAWorkspace("/Users/mantas/Uppin")
+  val workspaces = new TauWorkspaces(targetScheduler, targetBuilder)
+
+  try {
+    val workspace = workspaces.createAWorkspace("/Users/mantas/Uppin")
+
+    Await.result(workspace.build, Duration.Inf)
+  }
   catch {
     case e: Throwable => e.printStackTrace(System.err)
   }
   finally {
     executor.shutdown()
     BlockingIO.shutdown()
+    ec.shutdown()
   }
 }
