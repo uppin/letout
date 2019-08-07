@@ -1,4 +1,4 @@
-package tau
+package letout
 
 case class Bookmarks private(bookmarks: Map[String, Bookmark])
 

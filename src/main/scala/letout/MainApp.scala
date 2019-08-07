@@ -1,4 +1,4 @@
-package tau
+package letout
 
 import java.util.concurrent.Executors
 
@@ -16,7 +16,7 @@ object MainApp extends App {
   val targetScheduler = new TargetScheduler
   val targetBuilder = new TargetBuilder
 
-  val workspaces = new TauWorkspaces(targetScheduler, targetBuilder)
+  val workspaces = new LetoutWorkspaces(targetScheduler, targetBuilder)
 
   try {
     val workspace = workspaces.createAWorkspace("/Users/mantas/Uppin")

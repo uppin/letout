@@ -1,4 +1,4 @@
-package tau
+package letout
 
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -6,7 +6,7 @@ import java.nio.channels.{AsynchronousFileChannel, CompletionHandler}
 import java.nio.file._
 import java.nio.file.attribute.BasicFileAttributes
 
-import tau.WalkEvent.{PostVisitDirectory, PreVisitDirectory, VisitFile, VisitFileFailed}
+import letout.WalkEvent.{PostVisitDirectory, PreVisitDirectory, VisitFile, VisitFileFailed}
 
 import scala.concurrent.{Future, Promise}
 import scala.util.{Failure, Success}
@@ -106,7 +106,7 @@ object WalkEvent {
 }
 
 trait VisitResult[S] {
-  protected[tau] def state: S
+  protected[letout] def state: S
 }
 
 object VisitResult {

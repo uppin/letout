@@ -1,11 +1,11 @@
-package tau
+package letout
 
 import monix.execution.Scheduler
 import monix.reactive.{MulticastStrategy, Observable, Observer}
-import tau.Dependency.{MavenJar, OtherTargetDependency}
-import tau.ProjectWithDescriptor.UnresolvedDependency
-import tau.Results.seqOfTryToTryOfSeq
-import tau.TargetScheduler.UnresolvedDependencyInTarget
+import letout.Dependency.{MavenJar, OtherTargetDependency}
+import letout.ProjectWithDescriptor.UnresolvedDependency
+import letout.Results.seqOfTryToTryOfSeq
+import letout.TargetScheduler.UnresolvedDependencyInTarget
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.{ExecutionContext, Future}
@@ -101,7 +101,7 @@ private class SchedulingState private(
         }))
     } yield ScheduledTarget(targetCoordFor(target, projectWithDesc.descriptor), target, deps.toSet)
 
-  private def targetCoordFor(target: Target, descriptor: TauProjectDescriptor): TargetCoord =
+  private def targetCoordFor(target: Target, descriptor: LetoutProjectDescriptor): TargetCoord =
     TargetCoord(descriptor.path.relativize(target.associatedPath.get).toString, "")
 }
 
@@ -111,7 +111,7 @@ private object SchedulingState {
       new SchedulingState(TrieMap.empty[TargetCoord, ScheduledTarget], projects, output)
 }
 
-private case class ProjectWithDescriptor(project: Project, descriptor: TauProjectDescriptor) {
+private case class ProjectWithDescriptor(project: Project, descriptor: LetoutProjectDescriptor) {
 
   def resolveDependency(dep: DependencyReference): Try[Dependency] =
     dep match {

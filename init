@@ -169,9 +169,12 @@ def init():
     print('Compiling the tool')
 
     sources = glob.glob(os.path.join(currentDir, 'src/main/scala/**/*.scala'))
+    testSources = glob.glob(os.path.join(currentDir, 'src/test/scala/**/*.scala'))
     output = os.path.join(tauDir, 'tool.jar')
 
     output = compile_sources(compileDeps, sources, output)
+
+    test(compileDeps, output, testSources)
 
     bootClasspath = fetch_deps(['org.scala-lang:scala-library:2.12.8'])
 
@@ -180,6 +183,9 @@ def init():
     run_class(bootClasspath, compileDeps + ':' + output, 'tau.MainApp')
 
     print('Init done')
+
+def test(deps, mainJar, testSources):
+    print(deps, mainJar, testSources)
 
 def compile_command(args):
     resolved_files = flatten([glob.glob(pattern, recursive=True) for pattern in args.files])

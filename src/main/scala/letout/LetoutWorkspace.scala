@@ -1,4 +1,4 @@
-package tau
+package letout
 
 import java.nio.file._
 
@@ -6,29 +6,29 @@ import io.circe.JsonObject
 import io.circe.generic.auto._
 import monix.execution.Scheduler
 import monix.reactive.Consumer
-import tau.WalkEvent.{PreVisitDirectory, VisitFile}
+import letout.WalkEvent.{PreVisitDirectory, VisitFile}
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 
-trait TauWorkspace {
+trait LetoutWorkspace {
   def build: Future[Unit]
 }
 
-class TauWorkspaces(
+class LetoutWorkspaces(
     targetScheduler: TargetScheduler,
     targetBuilder: TargetBuilder)(implicit executionContext: ExecutionContext) {
 
-  def createAWorkspace(path: String): TauWorkspace =
+  def createAWorkspace(path: String): LetoutWorkspace =
     Await.result(createAWorkspaceAsync(path), Duration.Inf)
 
-  private def createAWorkspaceAsync(path: String): Future[TauWorkspace] = {
+  private def createAWorkspaceAsync(path: String): Future[LetoutWorkspace] = {
     for {
       projectFiles <- findProjectFiles(path)
-      projects = projectFiles.map(projectFile => new TauProject(projectFile))
+      projects = projectFiles.map(projectFile => new LetoutProject(projectFile))
       targets <- Future.sequence(projects.map(_.targets))
       _ = println(s"${targets.flatten.size} targets loaded in ${projects.size} projects")
-    } yield new IntTauWorkspace(path, projects)
+    } yield new IntLetoutWorkspace(path, projects)
   }
 
   private def findProjectFiles(path: String): Future[Seq[Path]] =
@@ -39,7 +39,7 @@ class TauWorkspaces(
       }
     } yield paths.result()
 
-  private class IntTauWorkspace(path: String, projects: Seq[Project])(implicit executionContext: ExecutionContext) extends TauWorkspace {
+  private class IntLetoutWorkspace(path: String, projects: Seq[Project])(implicit executionContext: ExecutionContext) extends LetoutWorkspace {
 
     implicit val scheduler = Scheduler(executionContext)
 
@@ -52,17 +52,17 @@ class TauWorkspaces(
 }
 
 trait Project {
-  def projectDescriptor: Future[TauProjectDescriptor]
+  def projectDescriptor: Future[LetoutProjectDescriptor]
   def targets: Future[Seq[Target]]
 }
 
-class TauProject(path: Path)(implicit executionContext: ExecutionContext) extends Project {
+class LetoutProject(path: Path)(implicit executionContext: ExecutionContext) extends Project {
 
   private val directory = path.getParent
 
-  lazy val projectDescriptor: Future[TauProjectDescriptor] =
+  lazy val projectDescriptor: Future[LetoutProjectDescriptor] =
     for {
-      descriptor <- Yaml.parseFileContents[TauProjectCodecDescriptor](path)
+      descriptor <- Yaml.parseFileContents[LetoutProjectCodecDescriptor](path)
     } yield descriptor.toDescriptor(path)
 
   override def targets: Future[Seq[Target]] =
@@ -79,7 +79,7 @@ class TauProject(path: Path)(implicit executionContext: ExecutionContext) extend
     for {
       targetFutures <- LocalFiles.walkFileTree(sourceRoot, Seq.newBuilder[Future[Seq[Target]]]) {
         case (state, VisitFile(path, _)) if path.endsWith("tau.targets") =>
-          VisitResult.Continue(state += TauTargetsFile.read(path))
+          VisitResult.Continue(state += LetoutTargetsFile.read(path))
       }.map(state => state.result())
       targets <- Future.sequence(targetFutures)
     } yield targets.flatten
@@ -90,9 +90,9 @@ trait Target {
   def deps: Set[TargetDependencyReference]
 }
 
-case class TauTarget(
+case class LetoutTarget(
     path: Path,
-    descriptor: TauTargetDescriptor
+    descriptor: LetoutTargetDescriptor
 ) extends Target {
 
   def associatedPath: Option[Path] = Some(path)
@@ -103,28 +103,28 @@ case class TauTarget(
 
 case class TargetCoord(path: String, name: String)
 
-object TauTargetsFile {
+object LetoutTargetsFile {
 
-  def read(path: Path)(implicit executionContext: ExecutionContext): Future[Seq[TauTarget]] =
+  def read(path: Path)(implicit executionContext: ExecutionContext): Future[Seq[LetoutTarget]] =
     for {
-      targetDescriptors <- Yaml.parseFileContents[Seq[TauTargetDescriptor]](path)
-    } yield targetDescriptors.map(desc => TauTarget(path, desc))
+      targetDescriptors <- Yaml.parseFileContents[Seq[LetoutTargetDescriptor]](path)
+    } yield targetDescriptors.map(desc => LetoutTarget(path, desc))
 }
 
-case class TauProjectDescriptor(
+case class LetoutProjectDescriptor(
     path: Path,
     sourceRoots: Seq[String],
     mounts: Map[String, String],
     bookmarks: Map[String, String]
 )
 
-case class TauProjectCodecDescriptor(
+case class LetoutProjectCodecDescriptor(
     sourceRoots: Option[Seq[String]],
     mounts: Option[Map[String, String]],
     bookmarks: Option[Map[String, String]]
 ) {
   def toDescriptor(path: Path) =
-    TauProjectDescriptor(
+    LetoutProjectDescriptor(
       path = path,
       sourceRoots = sourceRoots.getOrElse(Nil),
       mounts = mounts.getOrElse(Map.empty),
@@ -132,7 +132,7 @@ case class TauProjectCodecDescriptor(
     )
 }
 
-case class TauTargetDescriptor(
+case class LetoutTargetDescriptor(
     name: String,
     `type`: String,
     props: Option[JsonObject],
