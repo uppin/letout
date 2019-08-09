@@ -9,11 +9,93 @@ import glob
 import argparse
 import time
 from ng import NailgunConnection, NailgunException
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
 
 currentDir = os.path.dirname(inspect.getfile(inspect.currentframe()))
 tauDir = os.path.join(os.getcwd(), '.tau')
 coursier = os.path.join(tauDir, 'coursier')
 nailgun_dep = 'com.facebook:nailgun-server:1.0.0'
+scalaVersion = '2.12.8'
+coursierVersion = '1.1.0-M14-7'
+
+class SimpleBuild:
+
+  def build(self, deps, sources, output):
+    compileDeps = self.fetch_deps(deps)
+
+    print('Compiling ' + output)
+
+    output = self.compile_sources(compileDeps, sources, output)
+
+    return {
+      'compileDeps': compileDeps,
+      'output': output
+    }
+
+  def fetch_deps(self, coords):
+    if coords is None:
+      return None
+
+    coordsArgs = flatten([[coord] for coord in coords])
+
+    with subprocess.Popen([coursier, 'fetch'] + coordsArgs + ['--classpath'],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE) as fetch:
+
+      stdout = fetch.communicate()[0]
+      classpath = stdout.decode('utf-8').strip().split('\n')[-1]
+
+      return classpath
+
+  def compile_sources(self, classpath, sources, output):
+    ensure_ng('scalac', boot_classpath_for(self.get_scala_deps()))
+
+    exit = run_class_ng('scalac', 'scala.tools.nsc.Main', ['-d', output] + ['-cp', classpath] + sources)
+
+    if exit == 0:
+      print('Output to ' + output)
+    else:
+      raise Exception('Failed compiling ' + output + '. Exit code: ' + str(exit))
+
+    return output
+
+  def get_scala_deps(self):
+    return self.fetch_deps(['org.scala-lang:scala-compiler:' + scalaVersion])
+
+class BuildAgent:
+
+  def __init__(self, depPaths, agentJar):
+    self._depPaths = depPaths
+    self._agentJar = agentJar
+
+  def build(self, output, testClasses, deps = [], testDeps = [], sources = [], testSources = [], workDir = None):
+    args = ['--automation']
+
+    for dep in deps:
+      args += ['--dep', dep]
+
+    for dep in testDeps:
+      args += ['--test-dep', dep]
+
+    for source in testSources:
+      args += ['--test-sources', source]
+
+    if output is not None:
+      args += ['--output', output]
+
+    args += sources
+
+    try:
+      runtimeClasspath = run_class_with_output(self._depPaths, self._agentJar, 'letout.build.BuildAgent', args,
+        workDir = workDir)
+
+      print('== OUTP', runtimeClasspath)
+    except ChildProcessError:
+      print(str(output))
+
 
 def setup_dir():
   try:
@@ -32,25 +114,30 @@ def fetch_coursier():
 
   os.chmod(coursier, 0o744)
 
-def compile_sources(classpath, sources, output):
-  ensure_ng('scalac', boot_classpath_for(get_scala_deps()))
-
-  exit = run_class_ng('scalac', 'scala.tools.nsc.Main', ['-d', output] + ['-cp', classpath] + sources)
-
-  if exit == 0:
-    print('Output to ' + output)
-
-  return output
-
-def run_class(bootClasspath, classpath, className, args = []):
+def run_class(bootClasspath, classpath, className, args = [], workDir = None):
   commandArgs = mk_java_command(bootClasspath, classpath, className, args)
 
   print(' '.join(commandArgs))
 
-  result = subprocess.call(commandArgs)
+  result = subprocess.call(commandArgs, cwd = workDir)
 
   if result > 0:
     raise ChildProcessError('Command exited with ' + str(result))
+
+def run_class_with_output(bootClasspath, classpath, className, args = [], workDir = None):
+  commandArgs = mk_java_command(bootClasspath, classpath, className, args)
+
+  print(' '.join(commandArgs))
+
+  with subprocess.Popen(commandArgs, cwd = workDir, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+
+    output, err = p.communicate()
+    result = p.returncode
+
+    if result > 0:
+      raise ChildProcessError('Command exited with ' + str(result))
+
+    return output
 
 def run_class_ng(name, className, args = []):
   with get_nailgun_connection(name) as c:
@@ -58,6 +145,8 @@ def run_class_ng(name, className, args = []):
 
     if exitCode == 898:
       raise Exception('No such command ' + className)
+
+    return exitCode
 
 def ensure_ng(name, bootClasspath, classpath = None):
   conn = get_nailgun_connection(name)
@@ -130,74 +219,71 @@ def mk_java_command(bootClasspath, classpath, className, args = []):
 
   return list(filter(lambda arg: len(arg) > 0, ['java', boot_classpath_for(bootClasspath)] + classpathArg + [className] + args))
 
-def fetch_deps(coords):
-  if coords is None:
-    return None
-
-  coordsArgs = flatten([[coord] for coord in coords])
-
-  with subprocess.Popen([coursier, 'fetch'] + coordsArgs + ['--classpath'],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE) as fetch:
-
-    stdout = fetch.communicate()[0]
-    classpath = stdout.decode('utf-8').strip().split('\n')[-1]
-
-    return classpath
-
 def boot_classpath_for(classpath):
   if classpath is not None:
     return '-Xbootclasspath/a:{0}'.format(classpath)
   else:
     return ''
 
-def flatten(a):
-    return [item for sublist in a for item in sublist]
+def compile_command(args):
+  resolved_files = flatten([glob.glob(pattern, recursive=True) for pattern in args.files])
+  deps = args.deps
+  outputJar = args.jar[0]
 
-def init():
-    setup_dir()
+  print('Compiling', resolved_files, 'to', outputJar)
 
-    print('Fetching deps')
+  compile_sources(fetch_deps(args.deps), resolved_files, outputJar)
 
-    compileDeps = fetch_deps([
+def init_build_agent():
+  print('Fetching deps')
+
+  build = SimpleBuild()
+
+
+  sources = glob.glob(os.path.join(currentDir, 'src/main/scala/letout/build/*.scala'))
+  output = os.path.join(tauDir, 'build-agent.jar')
+
+  result = build.build(
+    deps = [
+      'io.get-coursier:coursier_2.12:' + coursierVersion,
+      'io.get-coursier:coursier-cache_2.12:' + coursierVersion,
+      'org.scala-lang:scala-compiler:' + scalaVersion,
+      'org.specs2:specs2-core_2.12:4.7.0',
+      'com.twitter:util-core_2.12:7.1.0',
+      'com.github.scopt:scopt_2.12:3.5.0'
+    ],
+    sources = sources,
+    output = output
+  )
+
+  return BuildAgent(
+    depPaths = result['compileDeps'],
+    agentJar = result['output']
+  )
+
+def init_letout(agent):
+  result = agent.build(
+    workDir = currentDir,
+    deps = [
       'io.circe:circe-yaml_2.12:0.9.0',
       'io.circe:circe-generic_2.12:0.11.1',
-      'io.monix:monix_2.12:3.0.0-8084549',
-      nailgun_dep
-    ])
+      'io.monix:monix_2.12:3.0.0-8084549'
+    ],
+    testDeps = [
+      'org.specs2:specs2-core_2.12:4.7.0'
+    ],
+    sources = ['src/main/scala/**/*.scala'],
+    testSources = ['src/main/scala/**/*Spec.scala', 'src/test/scala/**/*.scala'],
+    output = os.path.join(tauDir, 'letout.jar'),
+    testClasses = os.path.join(tauDir, 'letout/test-classes'))
 
-    print('Compiling the tool')
-
-    sources = glob.glob(os.path.join(currentDir, 'src/main/scala/**/*.scala'))
-    testSources = glob.glob(os.path.join(currentDir, 'src/test/scala/**/*.scala'))
-    output = os.path.join(tauDir, 'tool.jar')
-
-    output = compile_sources(compileDeps, sources, output)
-
-    test(compileDeps, output, testSources)
-
-    bootClasspath = fetch_deps(['org.scala-lang:scala-library:2.12.8'])
-
-    # ensure_ng('tool', bootClasspath, compileDeps + ':' + output)
-
-    run_class(bootClasspath, compileDeps + ':' + output, 'tau.MainApp')
-
-    print('Init done')
+  run_class(result['bootClasspath'], result['classpath'], 'letout.MainApp')
 
 def test(deps, mainJar, testSources):
     print(deps, mainJar, testSources)
 
-def compile_command(args):
-    resolved_files = flatten([glob.glob(pattern, recursive=True) for pattern in args.files])
-    deps = args.deps
-    outputJar = args.jar[0]
-
-    print('Compiling', resolved_files, 'to', outputJar)
-
-    compile_sources(fetch_deps(args.deps), resolved_files, outputJar)
-
-def get_scala_deps():
-    return fetch_deps(['org.scala-lang:scala-compiler:2.12.8'])
+def flatten(a):
+    return [item for sublist in a for item in sublist]
 
 parser = argparse.ArgumentParser(description='Letout basic build.')
 
@@ -218,6 +304,9 @@ compile_parser.add_argument('--dep', dest='deps', action='store',
 args = parser.parse_args()
 
 if not vars(args):
-    init()
+    setup_dir()
+    agent = init_build_agent()
+
+    init_letout(agent)
 else:
     print(args.func(args))
