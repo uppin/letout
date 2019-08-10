@@ -8,26 +8,22 @@ import monix.execution.Scheduler
 import monix.reactive.Consumer
 import letout.WalkEvent.{PreVisitDirectory, VisitFile}
 
-import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future}
 
 trait LetoutWorkspace {
-  def build: Future[Unit]
+  def build(implicit callScope: CallScope): Future[Unit]
 }
 
 class LetoutWorkspaces(
     targetScheduler: TargetScheduler,
     targetBuilder: TargetBuilder)(implicit executionContext: ExecutionContext) {
 
-  def createAWorkspace(path: String): LetoutWorkspace =
-    Await.result(createAWorkspaceAsync(path), Duration.Inf)
-
-  private def createAWorkspaceAsync(path: String): Future[LetoutWorkspace] = {
+  def createAWorkspace(path: String)(implicit callScope: CallScope): Future[LetoutWorkspace] = {
     for {
       projectFiles <- findProjectFiles(path)
       projects = projectFiles.map(projectFile => new LetoutProject(projectFile))
       targets <- Future.sequence(projects.map(_.targets))
-      _ = println(s"${targets.flatten.size} targets loaded in ${projects.size} projects")
+      _ = callScope.println(s"${targets.flatten.size} targets loaded in ${projects.size} projects")
     } yield IntLetoutWorkspace(path, projects)
   }
 
@@ -43,10 +39,10 @@ class LetoutWorkspaces(
 
     implicit val scheduler = Scheduler(executionContext)
 
-    def build: Future[Unit] = {
+    def build(implicit callScope: CallScope): Future[Unit] = {
       val targetQueue = targetScheduler.processBuildsInOrder(projects)
 
-      targetQueue.consumeWith(Consumer.foreach(target => println("== BUILD", target.coord))).runAsync
+      targetQueue.consumeWith(Consumer.foreach(target => callScope.println("== BUILD", target.coord))).runAsync
     }
   }
 }

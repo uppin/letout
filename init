@@ -259,7 +259,8 @@ def init_letout(agent):
     deps = [
       'io.circe:circe-yaml_2.12:0.9.0',
       'io.circe:circe-generic_2.12:0.11.1',
-      'io.monix:monix_2.12:3.0.0-8084549'
+      'io.monix:monix_2.12:3.0.0-8084549',
+      nailgun_dep
     ],
     testDeps = [
       'org.specs2:specs2-core_2.12:4.7.0'
@@ -268,7 +269,7 @@ def init_letout(agent):
     testSources = ['src/main/scala/**/*Spec.scala', 'src/test/scala/**/*.scala'],
     homeDir = os.path.join(tauDir),
     scriptName = 'lets',
-    mainClass = 'letout.MainApp',
+    mainClass = 'letout.MainAppNG',
 
     testClasses = os.path.join(tauDir, 'letout/test-classes'))
 
