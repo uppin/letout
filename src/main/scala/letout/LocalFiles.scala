@@ -8,11 +8,10 @@ import java.nio.file.attribute.BasicFileAttributes
 
 import letout.WalkEvent.{PostVisitDirectory, PreVisitDirectory, VisitFile, VisitFileFailed}
 
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.util.{Failure, Success}
 
 object LocalFiles {
-  import scala.concurrent.ExecutionContext.Implicits.global
 
   def walkFileTree[S](path: Path, state: S)(fn: PartialFunction[(S, WalkEvent), VisitResult[S]]): Future[S] = {
     var currentState = state
@@ -50,34 +49,34 @@ object LocalFiles {
     }(BlockingIO.blockingExecutionContext)
   }
 
-  def readFileContents(path: Path): Future[String] = {
+  def readFileContents(path: Path)(implicit executionContext: ExecutionContext): Future[String] = {
     val channel = AsynchronousFileChannel.open(path, StandardOpenOption.READ)
 
     for {
-      contents <- new FileReading(channel).readToEnd()
+      contents <- new FileReading(channel).readToEnd
     } yield contents
   }
 
-  private class FileReading(channel: AsynchronousFileChannel) {
+  private class FileReading(channel: AsynchronousFileChannel)(implicit executionContext: ExecutionContext) {
     val buffer = ByteBuffer.allocate(1024)
     val contentBuilder = Array.newBuilder[Byte]
 
     var readPosition = 0
 
-    def readToEnd(): Future[String] = {
+    def readToEnd: Future[String] = {
       for {
 
-        _ <- readRecursively()
+        _ <- readRecursively
       } yield new String(contentBuilder.result(), "UTF-8")
     }
 
-    private def readRecursively(): Future[Unit] =
+    private def readRecursively: Future[Unit] =
       for {
         len <- withCompletionHandler[Integer](completionHandler => channel.read[Any](buffer, readPosition, null, completionHandler))
         _ = contentBuilder ++= buffer.array().take(len)
         _ = readPosition += len
         _ = buffer.position(0)
-        _ <- if (len >= 0) readRecursively() else Future.successful(())
+        _ <- if (len >= 0) readRecursively else Future.successful(())
       } yield ()
 
     private def withCompletionHandler[R](fn: CompletionHandler[R, Any] => Unit): Future[R] = {

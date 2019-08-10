@@ -9,6 +9,8 @@ import glob
 import argparse
 import time
 from ng import NailgunConnection, NailgunException
+from shutil import copyfile
+
 try:
     from StringIO import StringIO
 except ImportError:
@@ -71,8 +73,8 @@ class BuildAgent:
     self._depPaths = depPaths
     self._agentJar = agentJar
 
-  def build(self, output, testClasses, deps = [], testDeps = [], sources = [], testSources = [], workDir = None):
-    args = ['--automation']
+  def mk_script(self, homeDir, scriptName, mainClass, testClasses = None, deps = [], testDeps = [], sources = [], testSources = [], workDir = None):
+    args = []
 
     for dep in deps:
       args += ['--dep', dep]
@@ -83,16 +85,20 @@ class BuildAgent:
     for source in testSources:
       args += ['--test-sources', source]
 
-    if output is not None:
-      args += ['--output', output]
+    if homeDir is not None:
+      args += ['--home-dir', homeDir]
+
+    if scriptName is not None:
+      args += ['--script-name', scriptName]
+
+    if mainClass is not None:
+      args += ['--main-class', mainClass]
 
     args += sources
 
     try:
-      runtimeClasspath = run_class_with_output(self._depPaths, self._agentJar, 'letout.build.BuildAgent', args,
+      run_class(self._depPaths, self._agentJar, 'letout.build.BuildAgent', args,
         workDir = workDir)
-
-      print('== OUTP', runtimeClasspath)
     except ChildProcessError:
       print(str(output))
 
@@ -103,6 +109,8 @@ def setup_dir():
     print('Create dir', tauDir)
   except FileExistsError:
     pass
+
+  copyfile(os.path.join(currentDir, 'ng.py'), os.path.join(tauDir, 'ng.py'))
 
 def fetch_coursier():
   print('Fetching coursier')
@@ -123,21 +131,6 @@ def run_class(bootClasspath, classpath, className, args = [], workDir = None):
 
   if result > 0:
     raise ChildProcessError('Command exited with ' + str(result))
-
-def run_class_with_output(bootClasspath, classpath, className, args = [], workDir = None):
-  commandArgs = mk_java_command(bootClasspath, classpath, className, args)
-
-  print(' '.join(commandArgs))
-
-  with subprocess.Popen(commandArgs, cwd = workDir, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
-
-    output, err = p.communicate()
-    result = p.returncode
-
-    if result > 0:
-      raise ChildProcessError('Command exited with ' + str(result))
-
-    return output
 
 def run_class_ng(name, className, args = []):
   with get_nailgun_connection(name) as c:
@@ -239,7 +232,6 @@ def init_build_agent():
 
   build = SimpleBuild()
 
-
   sources = glob.glob(os.path.join(currentDir, 'src/main/scala/letout/build/*.scala'))
   output = os.path.join(tauDir, 'build-agent.jar')
 
@@ -262,7 +254,7 @@ def init_build_agent():
   )
 
 def init_letout(agent):
-  result = agent.build(
+  result = agent.mk_script(
     workDir = currentDir,
     deps = [
       'io.circe:circe-yaml_2.12:0.9.0',
@@ -274,10 +266,11 @@ def init_letout(agent):
     ],
     sources = ['src/main/scala/**/*.scala'],
     testSources = ['src/main/scala/**/*Spec.scala', 'src/test/scala/**/*.scala'],
-    output = os.path.join(tauDir, 'letout.jar'),
-    testClasses = os.path.join(tauDir, 'letout/test-classes'))
+    homeDir = os.path.join(tauDir),
+    scriptName = 'lets',
+    mainClass = 'letout.MainApp',
 
-  run_class(result['bootClasspath'], result['classpath'], 'letout.MainApp')
+    testClasses = os.path.join(tauDir, 'letout/test-classes'))
 
 def test(deps, mainJar, testSources):
     print(deps, mainJar, testSources)

@@ -5,7 +5,7 @@ import java.nio.file.Path
 import io.circe.{Decoder, Json}
 import io.circe.yaml.parser
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 
 object Yaml {
@@ -13,9 +13,7 @@ object Yaml {
   case class YamlFailedToParse(path: Path, cause: Throwable) extends RuntimeException("" +
     s"Failed to parse Yaml file on path ${path}", cause)
 
-  import scala.concurrent.ExecutionContext.Implicits.global
-
-  def parseFileContents[T](path: Path)(implicit decoder: Decoder[T]): Future[T] =
+  def parseFileContents[T](path: Path)(implicit decoder: Decoder[T], executionContext: ExecutionContext): Future[T] =
     for {
       content <- LocalFiles.readFileContents(path)
       result <- Future.fromTry(parse[T](content).recover {

@@ -28,7 +28,7 @@ class LetoutWorkspaces(
       projects = projectFiles.map(projectFile => new LetoutProject(projectFile))
       targets <- Future.sequence(projects.map(_.targets))
       _ = println(s"${targets.flatten.size} targets loaded in ${projects.size} projects")
-    } yield new IntLetoutWorkspace(path, projects)
+    } yield IntLetoutWorkspace(path, projects)
   }
 
   private def findProjectFiles(path: String): Future[Seq[Path]] =
@@ -39,7 +39,7 @@ class LetoutWorkspaces(
       }
     } yield paths.result()
 
-  private class IntLetoutWorkspace(path: String, projects: Seq[Project])(implicit executionContext: ExecutionContext) extends LetoutWorkspace {
+  private case class IntLetoutWorkspace(path: String, projects: Seq[Project])(implicit executionContext: ExecutionContext) extends LetoutWorkspace {
 
     implicit val scheduler = Scheduler(executionContext)
 
@@ -56,7 +56,7 @@ trait Project {
   def targets: Future[Seq[Target]]
 }
 
-class LetoutProject(path: Path)(implicit executionContext: ExecutionContext) extends Project {
+case class LetoutProject(path: Path)(implicit executionContext: ExecutionContext) extends Project {
 
   private val directory = path.getParent
 

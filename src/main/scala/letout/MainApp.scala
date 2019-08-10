@@ -13,6 +13,10 @@ object MainApp extends App {
 
   implicit val ec = Scheduler(executor)
 
+  sys.addShutdownHook {
+    BlockingIO.shutdown()
+  }
+
   val targetScheduler = new TargetScheduler
   val targetBuilder = new TargetBuilder
 
@@ -25,10 +29,8 @@ object MainApp extends App {
   }
   catch {
     case e: Throwable => e.printStackTrace(System.err)
-  }
-  finally {
+  } finally {
     executor.shutdown()
-    BlockingIO.shutdown()
     ec.shutdown()
   }
 }
